@@ -162,7 +162,7 @@ class CodexCoordinator:
         })
         await self._send_notification("initialized", {})
 
-        resp = await self._rpc("thread/start", {
+        thread_params = {
             "model": self.model,
             "personality": "pragmatic",
             "baseInstructions": COORDINATOR_PROMPT,
@@ -170,7 +170,11 @@ class CodexCoordinator:
             "approvalPolicy": "on-request",
             "sandbox": "read-only",
             "dynamicTools": COORDINATOR_TOOLS,
-        })
+        }
+        if self.model == "gpt-5.4":
+            thread_params["reasoningEffort"] = "xhigh"
+
+        resp = await self._rpc("thread/start", thread_params)
         self._thread_id = resp.get("result", {}).get("thread", {}).get("id", "")
         logger.info(f"Codex coordinator started (thread={self._thread_id}, model={self.model})")
 

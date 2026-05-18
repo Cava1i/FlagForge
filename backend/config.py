@@ -14,6 +14,10 @@ class Settings(BaseSettings):
 
     # API Keys
     anthropic_api_key: str = ""
+    anthropic_base_url: str = ""
+    anthropic_auth_token: str = ""
+    claude_code_disable_nonessential_traffic: str = "1"
+    openai_base_url: str = "https://api.psydo.top"
     openai_api_key: str = ""
     gemini_api_key: str = ""
 
@@ -29,5 +33,28 @@ class Settings(BaseSettings):
     max_concurrent_challenges: int = 10
     max_attempts_per_challenge: int = 3
     container_memory_limit: str = "16g"
+    flagforge_agent_count: int = 1
+    flagforge_agent_models: str = "gpt-5.5"
+    flagforge_agent_skills: str = ""
+    flagforge_writeup_prompt: str = (
+        "请基于你刚才完整的 CTF 解题过程，输出一份适合初学者学习复盘的中文 Markdown writeup。"
+        "要求包含：题目背景、关键漏洞/思路、尝试过程、最终利用步骤、flag、常见坑点和复盘建议。"
+        "不要省略关键命令或推理。"
+    )
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+
+    def claude_sdk_env(self) -> dict[str, str]:
+        """Environment overrides passed to Claude Agent SDK subprocesses."""
+        env = {"CLAUDECODE": ""}
+        if self.anthropic_api_key:
+            env["ANTHROPIC_API_KEY"] = self.anthropic_api_key
+        if self.anthropic_base_url:
+            env["ANTHROPIC_BASE_URL"] = self.anthropic_base_url
+        if self.anthropic_auth_token:
+            env["ANTHROPIC_AUTH_TOKEN"] = self.anthropic_auth_token
+        if self.claude_code_disable_nonessential_traffic:
+            env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = (
+                self.claude_code_disable_nonessential_traffic
+            )
+        return env

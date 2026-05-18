@@ -1,0 +1,11 @@
+name: Manual Upload Example
+category: misc
+value: 100
+description: |
+  Example challenge directory matching the Web UI manual upload format.
+connection_info: ""
+tags:
+  - example
+  - manual-upload
+hints:
+  - content: Inspect the attached README first.

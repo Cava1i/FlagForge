@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 PROVIDER_MAP: dict[str, str] = {
     "bedrock": "anthropic",
     "claude-sdk": "anthropic",
+    "openai": "openai",
     "azure": "openai",
     "zen": "openai",
     "codex": "openai",
@@ -43,6 +45,11 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "cached_input": 0.25,
         "output": 15.00,
     },
+    "gpt-5.5": {
+        "input": 2.50,
+        "cached_input": 0.25,
+        "output": 15.00,
+    },
     "gpt-5.3-codex": {
         "input": 1.75,
         "cached_input": 0.175,
@@ -59,6 +66,19 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "output": 0.60,
     },
 }
+
+
+def _normalize_provider_spec(provider_spec: str) -> str:
+    provider = provider_spec.strip().lower()
+    return provider.split("/", 1)[0] if "/" in provider else provider
+
+
+def _normalize_model_name(model_name: str) -> str:
+    model = model_name.strip()
+    parts = model.split("/")
+    if len(parts) >= 2 and _normalize_provider_spec(parts[0]) in PROVIDER_MAP:
+        model = parts[1]
+    return re.sub(r"^gpt(?=\d)", "gpt-", model)
 
 
 def _calc_fallback_cost(usage: RunUsage, model: str) -> float | None:
@@ -81,15 +101,16 @@ def calc_cost(usage: RunUsage, model_name: str, provider_spec: str = "") -> floa
     if not usage.has_values():
         return 0.0
 
-    provider_id = PROVIDER_MAP.get(provider_spec, "unknown")
+    provider_id = PROVIDER_MAP.get(_normalize_provider_spec(provider_spec), "unknown")
+    pricing_model = _normalize_model_name(model_name)
 
     try:
-        price = calc_price(usage, model_name, provider_id=provider_id)
+        price = calc_price(usage, pricing_model, provider_id=provider_id)
         return float(price.total_price)
     except Exception:
         pass
 
-    fallback = _calc_fallback_cost(usage, model_name)
+    fallback = _calc_fallback_cost(usage, pricing_model)
     if fallback is not None:
         return fallback
 

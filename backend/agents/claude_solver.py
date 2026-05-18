@@ -47,6 +47,7 @@ class ClaudeSolver:
         ctfd: CTFdClient,
         cost_tracker: CostTracker,
         settings: object,
+        agent_skills: list[str] | None = None,
         cancel_event: asyncio.Event | None = None,
         no_submit: bool = False,
         submit_fn=None,
@@ -60,6 +61,7 @@ class ClaudeSolver:
         self.ctfd = ctfd
         self.cost_tracker = cost_tracker
         self.settings = settings
+        self.agent_skills = agent_skills or []
         self.cancel_event = cancel_event or asyncio.Event()
         self.no_submit = no_submit
         self.submit_fn = submit_fn
@@ -97,7 +99,8 @@ class ClaudeSolver:
         sandbox_preamble = (
             "IMPORTANT: You are running inside a Docker sandbox. "
             "All files are under /challenge/ — distfiles at /challenge/distfiles/, "
-            "workspace at /challenge/workspace/. Do NOT use any paths outside /challenge/. "
+            "workspace at /challenge/workspace/. Do NOT use any paths outside /challenge/ "
+            "except read-only Codex skills at /root/.codex/skills/. "
             "All bash commands run inside the container via docker exec. "
             "Use bash for everything: cat/head to read files, tee/echo> to write, find/grep to search. "
             "submit_flag 'FLAG' to submit. notify_coordinator 'MSG' to message the coordinator.\n\n"
@@ -105,6 +108,7 @@ class ClaudeSolver:
         system_prompt = sandbox_preamble + build_prompt(
             self.meta, distfile_names, container_arch=container_arch,
             has_named_tools=False,
+            agent_skills=self.agent_skills,
         )
 
         # PreToolUse hook: rewrite Bash commands to run in the sandbox container.
@@ -252,13 +256,15 @@ class ClaudeSolver:
 
         from backend.models import effort_from_spec
         effort = effort_from_spec(self.model_spec)
+        claude_env_fn = getattr(self.settings, "claude_sdk_env", None)
+        claude_env = claude_env_fn() if callable(claude_env_fn) else {"CLAUDECODE": ""}
 
         options = ClaudeAgentOptions(
             model=self.model_id,
             system_prompt=system_prompt,
             effort=effort,
             # Clear CLAUDECODE to prevent nested-session rejection when run from coordinator
-            env={"CLAUDECODE": ""},
+            env=claude_env,
             allowed_tools=["Bash", "WebFetch", "WebSearch"],
             permission_mode="bypassPermissions",
             output_format={"type": "json_schema", "schema": solver_output_json_schema()},
@@ -327,12 +333,11 @@ class ClaudeSolver:
                     )
 
                     output = getattr(message, "structured_output", None)
-                    if output:
-                        if output.get("type") == "flag_found":
-                            self._flag = output.get("flag")
-                            self._findings = f"Flag found via {output.get('method', '?')}: {self._flag}"
-                            if self.no_submit:
-                                self._confirmed = True
+                    if output and output.get("type") == "flag_found":
+                        self._flag = output.get("flag")
+                        self._findings = f"Flag found via {output.get('method', '?')}: {self._flag}"
+                        if self.no_submit:
+                            self._confirmed = True
 
             self.tracer.event("turn_complete", duration=round(time.monotonic() - t0, 1), cost=round(self._cost_usd, 4))
 

@@ -23,5 +23,7 @@ uv.lock
 
 # Runtime
 workspace/
+.ctf-agent/
+.codex-runtime/
 codex-schema-*/
 .claude/scheduled_tasks.lock

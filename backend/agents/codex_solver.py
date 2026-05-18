@@ -46,6 +46,7 @@ _rpc_counter = itertools.count(1)
 
 # Per-model reasoning effort (only for models that support it)
 REASONING_EFFORT: dict[str, str] = {
+    "gpt-5.4": "xhigh",
     "gpt-5.3-codex": "xhigh",
 }
 
@@ -127,6 +128,7 @@ class CodexSolver:
         ctfd: CTFdClient,
         cost_tracker: CostTracker,
         settings: object,
+        agent_skills: list[str] | None = None,
         cancel_event: asyncio.Event | None = None,
         no_submit: bool = False,
         submit_fn=None,
@@ -142,6 +144,7 @@ class CodexSolver:
         self.ctfd = ctfd
         self.cost_tracker = cost_tracker
         self.settings = settings
+        self.agent_skills = agent_skills or []
         self.cancel_event = cancel_event or asyncio.Event()
         self.no_submit = no_submit
         self.submit_fn = submit_fn
@@ -166,6 +169,7 @@ class CodexSolver:
         self._bump_insights: str | None = None
         self._structured_output: dict | None = None
         self._turn_error: str | None = None
+        self._last_agent_text = ""
         self._compact_requested = False
         self._pending_responses: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
@@ -181,6 +185,7 @@ class CodexSolver:
         system_prompt = build_prompt(
             self.meta, distfile_names, container_arch=container_arch,
             has_named_tools=True,
+            agent_skills=self.agent_skills,
         )
 
         self._proc = await asyncio.create_subprocess_exec(
@@ -205,7 +210,8 @@ class CodexSolver:
         sandbox_preamble = (
             "IMPORTANT: You are running inside a Docker sandbox. "
             "All files are under /challenge/ — distfiles at /challenge/distfiles/, "
-            "workspace at /challenge/workspace/. Do NOT use any paths outside /challenge/. "
+            "workspace at /challenge/workspace/. Do NOT use any paths outside /challenge/ "
+            "except read-only Codex skills at /root/.codex/skills/. "
             f"Your tools: {', '.join(tool_names)}. Use these for ALL operations.\n\n"
         )
         thread_params = {
@@ -215,7 +221,6 @@ class CodexSolver:
             "cwd": "/challenge",
             "approvalPolicy": "on-request",
             "sandbox": "read-only",
-            "serviceTier": "flex",
             "dynamicTools": SANDBOX_TOOLS,
         }
         # Reasoning effort for models that support it
@@ -301,6 +306,7 @@ class CodexSolver:
                     text = item.get("text", "")
                     phase = item.get("phase")  # "commentary" | "final_answer" | null
                     if text:
+                        self._last_agent_text = text
                         self._findings = text[:2000]
                         if phase != "commentary" and text.lstrip()[:1] == "{":
                             try:
@@ -347,15 +353,19 @@ class CodexSolver:
                 # Proactive compaction at 70% context window (only for small-context models like spark)
                 context_window = token_usage.get("modelContextWindow")
                 total_tokens = total.get("totalTokens", 0)
-                if context_window and context_window < 200_000 and total_tokens > context_window * 0.7:
-                    if not self._compact_requested:
-                        self._compact_requested = True
-                        logger.info(f"[{self.agent_name}] Requesting compaction ({total_tokens}/{context_window} tokens)")
-                        try:
-                            await self._rpc("thread/compact/start", {"threadId": self._thread_id})
-                            self.tracer.event("compact_requested", tokens=total_tokens, window=context_window)
-                        except Exception as e:
-                            logger.warning(f"[{self.agent_name}] Compaction request failed: {e}")
+                if (
+                    context_window
+                    and context_window < 200_000
+                    and total_tokens > context_window * 0.7
+                    and not self._compact_requested
+                ):
+                    self._compact_requested = True
+                    logger.info(f"[{self.agent_name}] Requesting compaction ({total_tokens}/{context_window} tokens)")
+                    try:
+                        await self._rpc("thread/compact/start", {"threadId": self._thread_id})
+                        self.tracer.event("compact_requested", tokens=total_tokens, window=context_window)
+                    except Exception as e:
+                        logger.warning(f"[{self.agent_name}] Compaction request failed: {e}")
 
                 self.cost_tracker.record_tokens(
                     self.agent_name, self.model_id,
@@ -498,12 +508,11 @@ class CodexSolver:
                     return self._result(QUOTA_ERROR)
                 return self._result(ERROR)
 
-            if self._structured_output:
-                if self._structured_output.get("type") == "flag_found":
-                    self._flag = self._structured_output.get("flag")
-                    self._findings = f"Flag found via {self._structured_output.get('method', '?')}: {self._flag}"
-                    if self.no_submit:
-                        self._confirmed = True
+            if self._structured_output and self._structured_output.get("type") == "flag_found":
+                self._flag = self._structured_output.get("flag")
+                self._findings = f"Flag found via {self._structured_output.get('method', '?')}: {self._flag}"
+                if self.no_submit:
+                    self._confirmed = True
 
             if self._confirmed and self._flag:
                 return self._result(FLAG_FOUND)
@@ -519,6 +528,26 @@ class CodexSolver:
             if "quota" in error_str.lower() or "rate" in error_str.lower():
                 return self._result(QUOTA_ERROR)
             return self._result(ERROR)
+
+    async def ask_followup(self, prompt_text: str) -> str:
+        if not self._proc:
+            await self.start()
+        assert self._thread_id
+
+        self._turn_done.clear()
+        self._turn_error = None
+        self._last_agent_text = ""
+        await self._rpc(
+            "turn/start",
+            {
+                "threadId": self._thread_id,
+                "input": [{"type": "text", "text": prompt_text}],
+            },
+        )
+        await self._turn_done.wait()
+        if self._turn_error:
+            raise RuntimeError(self._turn_error)
+        return self._last_agent_text or self._findings
 
     def bump(self, insights: str) -> None:
         self._bump_insights = insights

@@ -122,6 +122,9 @@ class DockerSandbox:
                 binds.append(f"{distfiles}:/challenge/distfiles:ro")
             if Path(meta_yml).exists():
                 binds.append(f"{meta_yml}:/challenge/metadata.yml:ro")
+            codex_skills = Path("/root/.codex/skills")
+            if codex_skills.exists():
+                binds.append(f"{codex_skills}:/root/.codex/skills:ro")
 
             config = {
                 "Image": self.image,

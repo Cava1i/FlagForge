@@ -53,6 +53,7 @@ class ChallengeSwarm:
     cost_tracker: CostTracker
     settings: Settings
     model_specs: list[str] = field(default_factory=lambda: list(DEFAULT_MODELS))
+    agent_skills: list[str] = field(default_factory=list)
     no_submit: bool = False
     coordinator_inbox: asyncio.Queue | None = None
 
@@ -88,6 +89,7 @@ class ChallengeSwarm:
                 ctfd=self.ctfd,
                 cost_tracker=self.cost_tracker,
                 settings=self.settings,
+                agent_skills=self.agent_skills,
                 cancel_event=self.cancel_event,
                 no_submit=self.no_submit,
                 submit_fn=_submit_fn,
@@ -104,6 +106,7 @@ class ChallengeSwarm:
                 ctfd=self.ctfd,
                 cost_tracker=self.cost_tracker,
                 settings=self.settings,
+                agent_skills=self.agent_skills,
                 cancel_event=self.cancel_event,
                 no_submit=self.no_submit,
                 submit_fn=_submit_fn,
@@ -131,6 +134,7 @@ class ChallengeSwarm:
             ctfd=self.ctfd,
             cost_tracker=self.cost_tracker,
             settings=self.settings,
+            agent_skills=self.agent_skills,
             cancel_event=self.cancel_event,
             sandbox=sandbox,
             owns_sandbox=owns_sandbox,
@@ -203,7 +207,8 @@ class ChallengeSwarm:
             logger.error(f"[{self.meta.name}/{model_spec}] Fatal: {e}", exc_info=True)
             return None
         finally:
-            await solver.stop()
+            if not getattr(solver, "_preserve_session", False):
+                await solver.stop()
 
     async def _run_solver_loop(self, solver, model_spec: str) -> tuple[SolverResult, SolverProtocol]:
         """Inner loop: start → run → bump → run → ..."""
@@ -227,6 +232,10 @@ class ChallengeSwarm:
                 await self.message_bus.post(model_spec, result.findings_summary[:500])
 
             if result.status == FLAG_FOUND:
+                result.winning_model_spec = model_spec
+                if hasattr(solver, "ask_followup"):
+                    result.agent_session = solver
+                    solver._preserve_session = True
                 self.cancel_event.set()
                 self.winner = result
                 logger.info(

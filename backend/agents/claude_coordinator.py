@@ -149,7 +149,7 @@ async def run_claude_coordinator(
     options = ClaudeAgentOptions(
         model=resolved_model,
         system_prompt=COORDINATOR_PROMPT,
-        env={"CLAUDECODE": ""},
+        env=settings.claude_sdk_env(),
         mcp_servers={"coordinator": mcp_server},
         allowed_tools=list(allowed),
         permission_mode="bypassPermissions",

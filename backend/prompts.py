@@ -60,6 +60,7 @@ def build_prompt(
     distfile_names: list[str],
     container_arch: str = "unknown",
     has_named_tools: bool = True,
+    agent_skills: str | list[str] | None = None,
 ) -> str:
     """Build the system prompt.
 
@@ -123,6 +124,16 @@ def build_prompt(
             lines.append(f"- `/challenge/distfiles/{name}`{suffix}")
         lines.append("")
 
+    skill_names = _parse_skill_names(agent_skills)
+    if skill_names:
+        lines += [
+            "## Available Codex Skills",
+            "Read matching skill files from `/root/.codex/skills` before deep analysis.",
+        ]
+        for skill in skill_names:
+            lines.append(f"- {skill}")
+        lines.append("")
+
     visible_hints = [h for h in meta.hints if h.get("content")]
     if visible_hints:
         lines.append("## Hints")
@@ -179,3 +190,15 @@ def build_prompt(
     ]
 
     return "\n".join(lines)
+
+
+def _parse_skill_names(value: str | list[str] | None) -> list[str]:
+    if value is None:
+        return []
+    raw_items = re.split(r"[\n,]", value) if isinstance(value, str) else value
+    names: list[str] = []
+    for item in raw_items:
+        name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return names

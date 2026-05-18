@@ -1,4 +1,4 @@
-"""Model resolution — Bedrock, Azure OpenAI, Zen, Google AI Studio."""
+"""Model resolution — OpenAI-compatible, Bedrock, Azure OpenAI, Zen, Google AI Studio."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import boto3
 from pydantic_ai.models import Model
 from pydantic_ai.models.bedrock import BedrockConverseModel, BedrockModelSettings
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
-from pydantic_ai.models.openai import OpenAIModel, OpenAIModelSettings
+from pydantic_ai.models.openai import OpenAIModel, OpenAIModelSettings, OpenAIResponsesModel
 from pydantic_ai.providers.bedrock import BedrockProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -17,19 +17,19 @@ from pydantic_ai.settings import ModelSettings
 if TYPE_CHECKING:
     from backend.config import Settings
 
-# Default model specs — claude-sdk and codex providers use the new solver backends
 DEFAULT_MODELS: list[str] = [
-    "claude-sdk/claude-opus-4-6/medium",
-    "claude-sdk/claude-opus-4-6/max",
-    "codex/gpt-5.4",
-    "codex/gpt-5.4-mini",
-    "codex/gpt-5.3-codex",
+    "openai/gpt-5.5",
+]
+
+AVAILABLE_MODEL_SPECS: list[str] = [
+    "openai/gpt-5.5",
 ]
 
 # Context window sizes (tokens)
 CONTEXT_WINDOWS: dict[str, int] = {
     "us.anthropic.claude-opus-4-6-v1": 1_000_000,
     "claude-opus-4-6": 1_000_000,
+    "gpt-5.5": 1_000_000,
     "gpt-5.4": 1_000_000,
     "gpt-5.4-mini": 400_000,
     "gpt-5.3-codex": 1_000_000,
@@ -41,6 +41,7 @@ CONTEXT_WINDOWS: dict[str, int] = {
 VISION_MODELS: set[str] = {
     "us.anthropic.claude-opus-4-6-v1",
     "claude-opus-4-6",
+    "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
     "gemini-3-flash-preview",
@@ -76,6 +77,14 @@ def resolve_model(spec: str, settings: Settings) -> Model:
                     api_key=settings.azure_openai_api_key,
                 ),
             )
+        case "openai":
+            return OpenAIResponsesModel(
+                model_id,
+                provider=OpenAIProvider(
+                    base_url=settings.openai_base_url,
+                    api_key=settings.openai_api_key,
+                ),
+            )
         case "zen":
             return OpenAIModel(
                 model_id,
@@ -100,7 +109,7 @@ def resolve_model(spec: str, settings: Settings) -> Model:
 
 def resolve_model_settings(spec: str) -> ModelSettings:
     """Get provider-specific model settings with caching enabled."""
-    provider = spec.split("/", 1)[0]
+    provider = provider_from_spec(spec)
     match provider:
         case "bedrock":
             return BedrockModelSettings(
@@ -109,10 +118,9 @@ def resolve_model_settings(spec: str) -> ModelSettings:
                 bedrock_cache_tool_definitions=True,
                 bedrock_cache_messages=True,
             )
-        case "azure" | "zen":
-            # Azure/Zen use OpenAI chat completions — server-side prompt caching
-            # is automatic, no explicit config needed. Set max_tokens to avoid
-            # reserving the full context window.
+        case "openai" | "azure" | "zen":
+            # OpenAI-compatible providers handle prompt caching server-side. Set max_tokens
+            # to avoid reserving the full context window.
             return OpenAIModelSettings(
                 max_tokens=128_000,
             )
@@ -136,7 +144,7 @@ def model_id_from_spec(spec: str) -> str:
 
 def provider_from_spec(spec: str) -> str:
     """Extract the provider from a spec."""
-    return spec.split("/", 1)[0]
+    return spec.split("/", 1)[0] if "/" in spec else "openai"
 
 
 def effort_from_spec(spec: str) -> str | None:

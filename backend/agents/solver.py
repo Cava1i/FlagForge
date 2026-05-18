@@ -114,6 +114,7 @@ class Solver:
         ctfd: CTFdClient,
         cost_tracker: CostTracker,
         settings: object,
+        agent_skills: list[str] | None = None,
         cancel_event: asyncio.Event | None = None,
         sandbox: DockerSandbox | None = None,
         owns_sandbox: bool | None = None,
@@ -125,6 +126,7 @@ class Solver:
         self.ctfd = ctfd
         self.cost_tracker = cost_tracker
         self.settings = settings
+        self.agent_skills = agent_skills or []
         self.cancel_event = cancel_event or asyncio.Event()
         self._owns_sandbox = owns_sandbox if owns_sandbox is not None else (sandbox is None)
 
@@ -167,6 +169,7 @@ class Solver:
             self.meta,
             distfile_names,
             container_arch=container_arch,
+            agent_skills=self.agent_skills,
         )
 
         model = resolve_model(self.model_spec, self.settings)
@@ -198,7 +201,6 @@ class Solver:
         assert self._agent is not None
 
         t0 = time.monotonic()
-        steps_before = self._step_count[0]
 
         try:
             from pydantic_ai.usage import UsageLimits
@@ -283,6 +285,54 @@ class Solver:
         self.loop_detector.reset()
         self.tracer.event("bump", insights=insights[:500])
         logger.info(f"[{self.agent_name}] Bumped with sibling insights")
+
+    async def ask_followup(self, prompt_text: str) -> str:
+        """Ask the same Pydantic AI solver session a free-form follow-up question."""
+        if not self._agent:
+            await self.start()
+        assert self._agent is not None
+
+        from pydantic_ai.usage import UsageLimits
+
+        t0 = time.monotonic()
+        result = await self._agent.run(
+            prompt_text,
+            deps=self.deps,
+            message_history=self._messages if self._messages else None,
+            output_type=str,
+            usage_limits=UsageLimits(request_limit=None),
+        )
+
+        usage = result.usage()
+        if usage is not None:
+            self.cost_tracker.record(
+                self.agent_name,
+                usage,
+                self.model_id,
+                provider_spec=provider_from_spec(self.model_spec),
+                duration_seconds=time.monotonic() - t0,
+            )
+
+        self._messages = result.all_messages()
+        answer = self._followup_text(result)
+        self._findings = answer[:2000]
+        tracer_event = getattr(getattr(self, "tracer", None), "event", None)
+        if callable(tracer_event):
+            tracer_event("followup", prompt=prompt_text[:300], answer=answer[:500])
+        return answer
+
+    def _followup_text(self, result: Any) -> str:
+        output = getattr(result, "output", None)
+        if isinstance(output, str) and output.strip():
+            return output.strip()
+
+        from pydantic_ai.messages import ModelResponse, TextPart
+
+        text_parts: list[str] = []
+        for msg in result.new_messages():
+            if isinstance(msg, ModelResponse):
+                text_parts.extend(p.content for p in msg.parts if isinstance(p, TextPart))
+        return "\n\n".join(part for part in text_parts if part).strip()
 
     def _result(self, status: str, run_steps: int | None = None, run_cost: float | None = None) -> SolverResult:
         agent_usage = self.cost_tracker.by_agent.get(self.agent_name)
